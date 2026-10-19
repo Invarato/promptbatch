@@ -64,3 +64,26 @@ def test_precios_propios(tmp_path):
     f.write_text('["modelo-x"]\ninput = 1.0\noutput = 2.0\n')
     p = config.cargar_precios(str(f))
     assert p["modelo-x"] == (1.0, 2.0, 0.1)
+
+
+def test_tarea_con_esquema_y_contexto(tmp_path):
+    (tmp_path / "guia.md").write_text("Usa tú, no usted.")
+    (tmp_path / "e.json").write_text('{"type":"object","properties":{"contenido":{"type":"string"}},"required":["contenido"],"additionalProperties":false}')
+    f = tmp_path / "t.md"
+    f.write_text('+++\ncontext = ["guia.md"]\nschema = "e.json"\nchecks = ["html:contenido"]\n+++\nEres traductor.\n---prompt---\n{{contenido}}')
+    t = tasks.cargar(f)
+    assert t.extension_salida == ".json"
+    sistema = t.system_completo()
+    assert sistema.startswith("Eres traductor.") and '<documento nombre="guia.md">' in sistema and "Usa tú" in sistema
+    p = runner.parametros(t, "<p>x</p>", "a", None)
+    assert p["output_config"]["format"]["type"] == "json_schema"
+    assert p["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert runner.nombre_salida(t, Path("a.html")) == "a.json"
+
+
+def test_check_sobre_campo_json():
+    entrada = '<p><a href="u">x</a></p>'
+    assert checks.pasar(["html:contenido"], entrada, '{"contenido": "<p><a href=\\"u\\">y</a></p>"}', es_json=True) == []
+    assert checks.pasar(["html:contenido"], entrada, '{"contenido": "<p>y</p>"}', es_json=True)
+    assert checks.pasar([], entrada, "no es json", es_json=True)
+    assert checks.pasar(["html:titulo"], entrada, '{"contenido": "x"}', es_json=True) == ["falta el campo de texto «titulo» en la respuesta"]

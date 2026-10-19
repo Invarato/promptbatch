@@ -30,8 +30,10 @@ prompt, con `{{contenido}}` (el fichero) y `{{nombre}}`. Más variables con `--v
 model = "claude-sonnet-5-5"
 max_tokens = 16000
 effort = "low"          # low, medium, high, xhigh, max (en traducciones suele bastar low)
-checks = ["html"]       # comprobaciones del resultado: html, no-vacio
+checks = ["html:contenido"]  # comprobaciones: html, no-vacio; «nombre:campo» la aplica a un campo del JSON
 extensions = [".html"]  # qué ficheros coger de una carpeta
+context = ["guia-de-estilo.md", "glosario.md"]  # se añaden al system prompt (con caché)
+schema = "traduccion.schema.json"               # respuesta en JSON con este esquema (salida .json)
 +++
 Eres un traductor profesional…
 ---prompt---
@@ -41,6 +43,11 @@ Traduce al {{idioma}} este HTML conservando todas las etiquetas:
 ```
 
 Ver [tasks/ejemplo-resumen.md](tasks/ejemplo-resumen.md). Sin `model`, se usa `claude-opus-5-5`.
+
+- **Contexto** (`context`, o `--context fichero` en la línea de órdenes): guías de estilo, glosarios… Van al
+  system prompt, que se cachea: a partir de la segunda petición se cobran a 0,1× (mínimo cacheable: 512 tokens).
+- **Esquema** (`schema`): la API devuelve JSON que cumple el esquema (salida estructurada). Útil para devolver
+  varios campos a la vez (título, slug, meta descripción, contenido) o listas de correcciones.
 
 ## Uso
 

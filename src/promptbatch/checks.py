@@ -5,6 +5,7 @@ Cada comprobación recibe (entrada, salida) y devuelve una lista de problemas (v
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 
@@ -45,10 +46,26 @@ def no_vacio(entrada: str, salida: str) -> list[str]:
 COMPROBACIONES = {"html": html, "no-vacio": no_vacio}
 
 
-def pasar(nombres: list[str], entrada: str, salida: str) -> list[str]:
+def pasar(nombres: list[str], entrada: str, salida: str, es_json: bool = False) -> list[str]:
+    """Con «nombre:campo» la comprobación se aplica a ese campo de la respuesta JSON."""
     problemas = []
-    for n in ["no-vacio", *nombres]:
-        if n not in COMPROBACIONES:
-            raise SystemExit(f"Comprobación desconocida: {n} (hay: {', '.join(COMPROBACIONES)})")
-        problemas += COMPROBACIONES[n](entrada, salida)
+    datos = None
+    if es_json:
+        try:
+            datos = json.loads(salida)
+        except json.JSONDecodeError as e:
+            return [f"la respuesta no es JSON válido: {e}"]
+    for n in ["no-vacio" if not es_json else "", *nombres]:
+        if not n:
+            continue
+        nombre, _, campo = n.partition(":")
+        if nombre not in COMPROBACIONES:
+            raise SystemExit(f"Comprobación desconocida: {nombre} (hay: {', '.join(COMPROBACIONES)})")
+        if campo:
+            if not isinstance(datos, dict) or not isinstance(datos.get(campo), str):
+                problemas.append(f"falta el campo de texto «{campo}» en la respuesta")
+                continue
+            problemas += [f"{campo}: {p}" for p in COMPROBACIONES[nombre](entrada, datos[campo])]
+        else:
+            problemas += COMPROBACIONES[nombre](entrada, salida)
     return problemas

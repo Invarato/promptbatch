@@ -4,8 +4,10 @@
     model = "claude-sonnet-5-5"
     max_tokens = 16000
     effort = "low"          # opcional: low, medium, high, xhigh, max
-    checks = ["html"]       # opcional: comprobaciones del resultado (ver checks.py)
+    checks = ["html"]       # opcional: comprobaciones del resultado (ver checks.py); «html:campo» con esquema
     extensions = [".html"]  # opcional: qué ficheros coger de una carpeta
+    context = ["guia.md"]   # opcional: ficheros que se añaden al system prompt (cacheado), rutas relativas a la tarea
+    schema = "esquema.json" # opcional: la respuesta es JSON que cumple este esquema; la salida se guarda como .json
     +++
     Texto del system prompt (opcional)
     ---prompt---
@@ -14,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +35,19 @@ class Tarea:
     effort: str | None = None
     checks: list[str] = field(default_factory=list)
     extensions: list[str] = field(default_factory=list)
+    contexto: list[Path] = field(default_factory=list)
+    esquema: dict | None = None
+
+    @property
+    def extension_salida(self) -> str | None:
+        """Con esquema, la salida es JSON; sin él, conserva la extensión de la entrada."""
+        return ".json" if self.esquema else None
+
+    def system_completo(self, extra: list[Path] | None = None) -> str:
+        partes = [self.system] if self.system else []
+        for f in [*self.contexto, *(extra or [])]:
+            partes.append(f"<documento nombre=\"{f.name}\">\n{f.read_text(encoding='utf-8').strip()}\n</documento>")
+        return "\n\n".join(partes)
 
     def construir(self, contenido: str, nombre: str, variables: dict[str, str] | None = None) -> str:
         texto = self.prompt
@@ -51,7 +67,7 @@ def cargar(ruta: str | Path) -> Tarea:
     system, _, prompt = texto.partition(SEPARADOR) if SEPARADOR in texto else ("", "", texto)
     if "{{contenido}}" not in prompt:
         raise SystemExit(f"{ruta}: el prompt de la tarea debe llevar {{{{contenido}}}}")
-    desconocidas = set(cab) - {"model", "max_tokens", "effort", "checks", "extensions"}
+    desconocidas = set(cab) - {"model", "max_tokens", "effort", "checks", "extensions", "context", "schema"}
     if desconocidas:
         raise SystemExit(f"{ruta}: claves desconocidas en la cabecera: {', '.join(sorted(desconocidas))}")
     return Tarea(
@@ -63,7 +79,17 @@ def cargar(ruta: str | Path) -> Tarea:
         effort=cab.get("effort"),
         checks=list(cab.get("checks", [])),
         extensions=list(cab.get("extensions", [])),
+        contexto=[_relativa(ruta, c) for c in cab.get("context", [])],
+        esquema=json.loads(_relativa(ruta, cab["schema"]).read_text(encoding="utf-8")) if "schema" in cab else None,
     )
+
+
+def _relativa(tarea: Path, f: str) -> Path:
+    p = Path(f).expanduser()
+    p = p if p.is_absolute() else tarea.parent / p
+    if not p.is_file():
+        raise SystemExit(f"{tarea}: no existe {p}")
+    return p
 
 
 def ficheros_de_entrada(entradas: list[str], extensiones: list[str]) -> list[Path]:

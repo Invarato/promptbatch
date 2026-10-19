@@ -28,6 +28,7 @@ def _comun(p: argparse.ArgumentParser):
     p.add_argument("--prices", help="fichero TOML con precios propios")
     p.add_argument("--key-file", help="fichero con la clave de la API")
     p.add_argument("--model", help="sustituye el modelo de la tarea")
+    p.add_argument("--context", action="append", help="fichero de contexto extra para el system prompt (se puede repetir)")
 
 
 def _preparar(a):
@@ -36,9 +37,10 @@ def _preparar(a):
         tarea.model = a.model
     ficheros = tasks.ficheros_de_entrada(a.entradas, tarea.extensions)
     salida = Path(a.salida)
-    trabajos = runner.preparar(ficheros, salida, a.force)
+    trabajos = runner.preparar(ficheros, salida, a.force, tarea)
     if a.limit:
         trabajos = trabajos[: a.limit]
+    a.contexto = [Path(c) for c in (a.context or [])]
     return tarea, trabajos, salida, _variables(a.var), config.cargar_precios(a.prices)
 
 
@@ -48,12 +50,12 @@ def cmd_run(a):
         print("Nada que hacer (todo está ya en la salida; usa --force para rehacerlo).")
         return 0
     client = config.cliente(a.key_file)
-    est = runner.estimar(client, tarea, trabajos, variables, precios, False)
+    est = runner.estimar(client, tarea, trabajos, variables, precios, False, a.contexto)
     print(f"{est['ficheros']} ficheros, {est['tokens_entrada']} tokens de entrada, coste estimado ≈ ${est['coste_estimado_usd'] or 0:.3f} con {tarea.model}")
     if a.dry_run:
         return 0
     salida.mkdir(parents=True, exist_ok=True)
-    gastado = runner.ejecutar(client, tarea, trabajos, salida, variables, precios, a.concurrency, a.max_cost)
+    gastado = runner.ejecutar(client, tarea, trabajos, salida, variables, precios, a.concurrency, a.max_cost, a.contexto)
     print(f"Gastado: ${gastado:.4f}. Detalle por fichero en {salida}/.meta/")
     return 0
 
@@ -64,14 +66,14 @@ def cmd_batch_submit(a):
         print("Nada que hacer.")
         return 0
     client = config.cliente(a.key_file)
-    est = runner.estimar(client, tarea, trabajos, variables, precios, True)
+    est = runner.estimar(client, tarea, trabajos, variables, precios, True, a.contexto)
     coste = est["coste_estimado_usd"]
     print(f"{est['ficheros']} ficheros, {est['tokens_entrada']} tokens de entrada, coste estimado en lote ≈ ${coste or 0:.3f} con {tarea.model}")
     if a.max_cost is not None and coste is not None and coste > a.max_cost:
         raise SystemExit(f"El coste estimado (${coste:.2f}) supera --max-cost (${a.max_cost:.2f}). No se envía.")
     if a.dry_run:
         return 0
-    print("Lote enviado:", runner.enviar_lote(client, tarea, trabajos, salida, variables))
+    print("Lote enviado:", runner.enviar_lote(client, tarea, trabajos, salida, variables, a.contexto))
     print(f"Consulta con: promptbatch batch status {salida}   y recoge con: promptbatch batch collect {a.tarea} {salida}")
     return 0
 

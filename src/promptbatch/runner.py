@@ -28,24 +28,36 @@ def extraer_texto(mensaje) -> str:
     return "".join(b.text for b in mensaje.content if b.type == "text")
 
 
-def parametros(tarea: Tarea, entrada: str, nombre: str, variables: dict | None) -> dict:
+def nombre_salida(tarea: Tarea, fichero: Path) -> str:
+    return fichero.stem + tarea.extension_salida if tarea.extension_salida else fichero.name
+
+
+def parametros(tarea: Tarea, entrada: str, nombre: str, variables: dict | None, contexto: list[Path] | None = None) -> dict:
     p: dict = {
         "model": tarea.model,
         "max_tokens": tarea.max_tokens,
         "messages": [{"role": "user", "content": tarea.construir(entrada, nombre, variables)}],
     }
-    if tarea.system:
-        # El system se repite en todas las peticiones: con caché solo se paga entero la primera vez.
-        p["system"] = [{"type": "text", "text": tarea.system, "cache_control": {"type": "ephemeral"}}]
+    system = tarea.system_completo(contexto)
+    if system:
+        # El system (con la guía y el glosario) se repite en todas las peticiones: con caché se paga entero
+        # solo la primera vez (las demás leen a 0,1×). Debe ser idéntico byte a byte: nada variable aquí.
+        p["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+    oc = {}
     if tarea.effort:
-        p["output_config"] = {"effort": tarea.effort}
+        oc["effort"] = tarea.effort
+    if tarea.esquema:
+        oc["format"] = {"type": "json_schema", "schema": tarea.esquema}
+    if oc:
+        p["output_config"] = oc
     return p
 
 
-def preparar(ficheros: list[Path], salida: Path, forzar: bool) -> list[Trabajo]:
+def preparar(ficheros: list[Path], salida: Path, forzar: bool, tarea: Tarea | None = None) -> list[Trabajo]:
     trabajos = []
     for i, f in enumerate(ficheros):
-        if not forzar and ((salida / f.name).exists() or (salida / "_revisar" / f.name).exists()):
+        n = nombre_salida(tarea, f) if tarea else f.name
+        if not forzar and ((salida / n).exists() or (salida / "_revisar" / n).exists()):
             continue   # ya hecho: se puede relanzar sin repetir (ni pagar) lo anterior
         cid = f"f{i:05d}-{hashlib.sha1(f.name.encode()).hexdigest()[:8]}"
         trabajos.append(Trabajo(f, f.read_text(encoding="utf-8"), cid))
@@ -53,12 +65,12 @@ def preparar(ficheros: list[Path], salida: Path, forzar: bool) -> list[Trabajo]:
 
 
 def guardar(salida: Path, t: Trabajo, tarea: Tarea, texto: str, uso, parada: str, precios: dict, batch: bool) -> dict:
-    problemas = checks.pasar(tarea.checks, t.entrada, texto)
+    problemas = checks.pasar(tarea.checks, t.entrada, texto, es_json=bool(tarea.esquema))
     if parada == "max_tokens":
         problemas.append("respuesta cortada por max_tokens: súbelo en la tarea")
     if parada == "refusal":
         problemas.append("la API rechazó la petición (refusal)")
-    destino = salida / ("_revisar" if problemas else "") / t.fichero.name
+    destino = salida / ("_revisar" if problemas else "") / nombre_salida(tarea, t.fichero)
     destino.parent.mkdir(parents=True, exist_ok=True)
     destino.write_text(texto, encoding="utf-8")
     meta = {
@@ -76,24 +88,25 @@ def guardar(salida: Path, t: Trabajo, tarea: Tarea, texto: str, uso, parada: str
     return meta
 
 
-def estimar(client, tarea: Tarea, trabajos: list[Trabajo], variables: dict | None, precios: dict, batch: bool) -> dict:
+def estimar(client, tarea: Tarea, trabajos: list[Trabajo], variables: dict | None, precios: dict, batch: bool, contexto=None) -> dict:
     """Cuenta los tokens de entrada (gratis, sin generar nada). La salida se estima igual que la entrada."""
     entrada = 0
     for t in trabajos:
-        p = parametros(tarea, t.entrada, t.fichero.stem, variables)
-        entrada += client.messages.count_tokens(model=p["model"], messages=p["messages"], **({"system": p["system"]} if "system" in p else {})).input_tokens
+        p = parametros(tarea, t.entrada, t.fichero.stem, variables, contexto)
+        extra = {k: p[k] for k in ("system", "output_config") if k in p}
+        entrada += client.messages.count_tokens(model=p["model"], messages=p["messages"], **extra).input_tokens
     salida = entrada   # estimación burda; el coste real queda en .meta/
     return {"ficheros": len(trabajos), "tokens_entrada": entrada, "tokens_salida_estimados": salida,
             "coste_estimado_usd": config.coste(precios, tarea.model, entrada, salida, batch)}
 
 
-def ejecutar(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variables, precios, concurrencia: int, max_coste: float | None) -> float:
+def ejecutar(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variables, precios, concurrencia: int, max_coste: float | None, contexto=None) -> float:
     """Una petición por fichero, varias a la vez. Para si el gasto llega a max_coste. Devuelve lo gastado."""
     gastado = 0.0
     parar = False
 
     def una(t: Trabajo):
-        p = parametros(tarea, t.entrada, t.fichero.stem, variables)
+        p = parametros(tarea, t.entrada, t.fichero.stem, variables, contexto)
         if tarea.max_tokens > 16000:   # el SDK exige streaming para respuestas muy largas
             with client.messages.stream(**p) as s:
                 return t, s.get_final_message()
@@ -133,11 +146,11 @@ def ejecutar(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variab
 
 # ---------------------------------------------------------------- lote (Batch API)
 
-def enviar_lote(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variables) -> str:
+def enviar_lote(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variables, contexto=None) -> str:
     from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
     from anthropic.types.messages.batch_create_params import Request
 
-    reqs = [Request(custom_id=t.custom_id, params=MessageCreateParamsNonStreaming(**parametros(tarea, t.entrada, t.fichero.stem, variables))) for t in trabajos]
+    reqs = [Request(custom_id=t.custom_id, params=MessageCreateParamsNonStreaming(**parametros(tarea, t.entrada, t.fichero.stem, variables, contexto))) for t in trabajos]
     lote = client.messages.batches.create(requests=reqs)
     salida.mkdir(parents=True, exist_ok=True)
     (salida / ".batch.json").write_text(json.dumps({
