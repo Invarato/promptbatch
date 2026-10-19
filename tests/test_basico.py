@@ -51,3 +51,16 @@ def test_coste_y_descuento_de_lote():
     assert config.coste(p, "claude-opus-5-5", 1_000_000, 1_000_000) == 24.0
     assert config.coste(p, "claude-opus-5-5", 1_000_000, 1_000_000, batch=True) == 12.0
     assert config.coste(p, "modelo-raro", 1, 1) is None
+
+
+def test_coste_con_cache():
+    p = config.cargar_precios(None)
+    # Sonnet 5.5: 1M escritos en caché (1,25 × 2) + 1M leídos (0,20) = 2,70
+    assert round(config.coste(p, "claude-sonnet-5-5", 0, 0, cache_escrita=1_000_000, cache_leida=1_000_000), 4) == 2.70
+
+
+def test_precios_propios(tmp_path):
+    f = tmp_path / "p.toml"
+    f.write_text('["modelo-x"]\ninput = 1.0\noutput = 2.0\n')
+    p = config.cargar_precios(str(f))
+    assert p["modelo-x"] == (1.0, 2.0, 0.1)

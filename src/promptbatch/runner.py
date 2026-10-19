@@ -64,8 +64,11 @@ def guardar(salida: Path, t: Trabajo, tarea: Tarea, texto: str, uso, parada: str
     meta = {
         "fichero": t.fichero.name, "tarea": tarea.nombre, "modelo": tarea.model, "batch": batch,
         "tokens_entrada": uso.input_tokens, "tokens_salida": uso.output_tokens,
+        "tokens_cache_escritos": getattr(uso, "cache_creation_input_tokens", 0) or 0,
         "tokens_cache_leidos": getattr(uso, "cache_read_input_tokens", 0) or 0,
-        "coste_usd": config.coste(precios, tarea.model, uso.input_tokens, uso.output_tokens, batch),
+        "coste_usd": config.coste(precios, tarea.model, uso.input_tokens, uso.output_tokens, batch,
+                                  getattr(uso, "cache_creation_input_tokens", 0) or 0,
+                                  getattr(uso, "cache_read_input_tokens", 0) or 0),
         "parada": parada, "problemas": problemas,
     }
     (salida / ".meta").mkdir(exist_ok=True)

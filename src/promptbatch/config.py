@@ -8,19 +8,22 @@ from pathlib import Path
 
 import anthropic
 
-# Precios orientativos en USD por millón de tokens (entrada, salida), de la tabla pública a 2026-10.
-# Comprueba los vigentes antes de fiarte del coste, o sobrescribe con --prices FICHERO.toml:
-#   ["claude-opus-5-5"]
-#   input = 4.0
-#   output = 20.0
+# Precios orientativos en USD por millón de tokens, de la tabla pública a 2026-10: (entrada, salida, lectura de caché).
+# Comprueba los vigentes en https://platform.claude.com/docs/en/about-claude/pricing y, si cambian, pásalos con
+# --prices FICHERO.toml:
+#   ["claude-sonnet-5-5"]
+#   input = 2.0
+#   output = 10.0
+#   cache_read = 0.20      # opcional: por defecto, 0.1 × input
 PRECIOS = {
-    "claude-fable-5-1": (10.0, 50.0),
-    "claude-opus-5-5": (4.0, 20.0),
-    "claude-opus-5": (5.0, 25.0),
-    "claude-sonnet-5-5": (2.0, 10.0),
-    "claude-sonnet-5": (2.0, 10.0),
-    "claude-haiku-5-5": (0.10, 0.50),
+    "claude-fable-5-1": (10.0, 50.0, 0.25),
+    "claude-opus-5-5": (4.0, 20.0, 0.20),
+    "claude-opus-5": (5.0, 25.0, 0.50),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.20),
+    "claude-sonnet-5": (2.0, 10.0, 0.20),
+    "claude-haiku-5-5": (0.10, 0.50, 0.01),
 }
+ESCRITURA_CACHE = 1.25   # escribir en la caché (5 minutos) cuesta 1,25 × la entrada
 DESCUENTO_BATCH = 0.5
 
 
@@ -45,18 +48,19 @@ def cliente(key_file: str | None = None) -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=leer_clave(key_file))
 
 
-def cargar_precios(fichero: str | None) -> dict[str, tuple[float, float]]:
+def cargar_precios(fichero: str | None) -> dict[str, tuple[float, float, float]]:
     precios = dict(PRECIOS)
     if fichero:
         for modelo, v in tomllib.loads(Path(fichero).read_text()).items():
-            precios[modelo] = (float(v["input"]), float(v["output"]))
+            precios[modelo] = (float(v["input"]), float(v["output"]), float(v.get("cache_read", 0.1 * float(v["input"]))))
     return precios
 
 
-def coste(precios: dict, modelo: str, entrada: int, salida: int, batch: bool = False) -> float | None:
-    """USD de una petición, o None si no se conoce el precio del modelo."""
+def coste(precios: dict, modelo: str, entrada: int, salida: int, batch: bool = False,
+          cache_escrita: int = 0, cache_leida: int = 0) -> float | None:
+    """USD de una petición, o None si no se conoce el precio del modelo. `entrada` no incluye la caché."""
     if modelo not in precios:
         return None
-    pi, po = precios[modelo]
-    total = (entrada * pi + salida * po) / 1_000_000
+    pi, po, pc = precios[modelo]
+    total = (entrada * pi + cache_escrita * pi * ESCRITURA_CACHE + cache_leida * pc + salida * po) / 1_000_000
     return total * (DESCUENTO_BATCH if batch else 1)
