@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "promptbatch"
+version = "0.1.0"
+description = "Lanza un prompt (una «tarea») sobre muchos ficheros con la API de Anthropic, en directo o en lote (Batch API, a mitad de precio)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["anthropic>=1.0"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+promptbatch = "promptbatch.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
