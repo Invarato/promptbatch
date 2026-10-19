@@ -67,6 +67,24 @@ promptbatch batch collect tasks/mi-tarea.md salida/
 En la salida: un fichero por entrada (mismo nombre); `_revisar/` con los que no pasaron las comprobaciones;
 `.meta/<fichero>.json` con tokens, coste y motivo de parada; `.batch.json` con el lote en curso.
 
+## Desde un agente (servidor MCP)
+
+`promptbatch-mcp` expone dos herramientas y un recurso, para que un agente como Claude Code delegue el trabajo
+masivo sin pasar el contenido por su conversación (solo recibe resúmenes):
+
+- `lanzar(tarea, entradas, salida, modo="estimar"|"directo"|"lote", limite, max_coste, variables, contexto, modelo)`
+- `consultar(salida)`: cómo va el lote; si ha terminado, lo recoge; resumen de hechos, a revisar y coste.
+- recurso `promptbatch://tareas`: las tareas de las carpetas de `PROMPTBATCH_TASK_DIRS`.
+
+```bash
+.venv/bin/pip install -e '.[mcp]'
+claude mcp add -s project promptbatch -e PROMPTBATCH_KEY_FILE=~/.config/promptbatch/api.key \
+  -e PROMPTBATCH_TASK_DIRS=./tasks -- "$PWD/.venv/bin/promptbatch-mcp"
+```
+
+La skill [skill/SKILL.md](skill/SKILL.md) le explica al agente cuándo y cómo usarlo (estimar antes, pedir
+permiso antes de gastar, probar con pocos, el resto en lote). Cópiala a `.claude/skills/promptbatch/` del proyecto.
+
 ## Costes
 
 Los precios que usa para estimar están en `config.py` (orientativos): compruébalos y, si cambian, pásalos con

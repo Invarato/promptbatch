@@ -14,9 +14,11 @@ dependencies = ["anthropic>=1.0"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
+mcp = ["mcp>=2.3"]
 
 [project.scripts]
 promptbatch = "promptbatch.cli:main"
+promptbatch-mcp = "promptbatch.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

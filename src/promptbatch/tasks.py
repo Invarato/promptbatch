@@ -37,6 +37,7 @@ class Tarea:
     extensions: list[str] = field(default_factory=list)
     contexto: list[Path] = field(default_factory=list)
     esquema: dict | None = None
+    ruta: Path | None = None
 
     @property
     def extension_salida(self) -> str | None:
@@ -71,6 +72,7 @@ def cargar(ruta: str | Path) -> Tarea:
     if desconocidas:
         raise SystemExit(f"{ruta}: claves desconocidas en la cabecera: {', '.join(sorted(desconocidas))}")
     return Tarea(
+        ruta=ruta.resolve(),
         nombre=ruta.stem,
         system=system.strip(),
         prompt=prompt.strip(),

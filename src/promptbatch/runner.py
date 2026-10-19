@@ -154,7 +154,8 @@ def enviar_lote(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, var
     lote = client.messages.batches.create(requests=reqs)
     salida.mkdir(parents=True, exist_ok=True)
     (salida / ".batch.json").write_text(json.dumps({
-        "id": lote.id, "tarea": tarea.nombre, "creado": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "id": lote.id, "tarea": tarea.nombre, "ruta_tarea": str(tarea.ruta) if tarea.ruta else None,
+        "creado": time.strftime("%Y-%m-%d %H:%M:%S"),
         "ficheros": {t.custom_id: str(t.fichero) for t in trabajos},
     }, indent=1))
     return lote.id
@@ -184,3 +185,17 @@ def recoger_lote(client, tarea: Tarea, salida: Path, precios: dict) -> dict:
         contadores["revisar" if meta["problemas"] else "ok"] += 1
     contadores["coste_usd"] = round(gastado, 4)
     return contadores
+
+
+def informe(salida: Path, max_detalle: int = 10) -> dict:
+    """Resumen de una carpeta de salida a partir de .meta/: cuántos bien, cuántos a revisar (y por qué) y el coste."""
+    metas = [json.loads(f.read_text()) for f in sorted((salida / ".meta").glob("*.json"))] if (salida / ".meta").is_dir() else []
+    revisar = [m for m in metas if m["problemas"]]
+    return {
+        "carpeta": str(salida),
+        "hechos": len(metas) - len(revisar),
+        "a_revisar": len(revisar),
+        "coste_usd": round(sum(m["coste_usd"] or 0 for m in metas), 4),
+        "tokens": {"entrada": sum(m["tokens_entrada"] for m in metas), "salida": sum(m["tokens_salida"] for m in metas)},
+        "revisar": [{"fichero": m["fichero"], "problema": m["problemas"][0][:200]} for m in revisar[:max_detalle]],
+    }
