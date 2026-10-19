@@ -87,3 +87,8 @@ def test_check_sobre_campo_json():
     assert checks.pasar(["html:contenido"], entrada, '{"contenido": "<p>y</p>"}', es_json=True)
     assert checks.pasar([], entrada, "no es json", es_json=True)
     assert checks.pasar(["html:titulo"], entrada, '{"contenido": "x"}', es_json=True) == ["falta el campo de texto «titulo» en la respuesta"]
+
+
+def test_check_campo_contra_campo_de_entrada_json():
+    entrada = '{"titulo": "T", "contenido": "<p><a href=\\"u\\">x</a></p>"}'
+    assert checks.pasar(["html:contenido"], entrada, '{"contenido": "<p><a href=\\"u\\">y</a></p>"}', es_json=True) == []

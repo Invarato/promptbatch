@@ -50,6 +50,10 @@ def pasar(nombres: list[str], entrada: str, salida: str, es_json: bool = False) 
     """Con «nombre:campo» la comprobación se aplica a ese campo de la respuesta JSON."""
     problemas = []
     datos = None
+    try:   # si la entrada también es JSON, «nombre:campo» compara campo con campo
+        entrada_json = json.loads(entrada)
+    except json.JSONDecodeError:
+        entrada_json = None
     if es_json:
         try:
             datos = json.loads(salida)
@@ -65,7 +69,8 @@ def pasar(nombres: list[str], entrada: str, salida: str, es_json: bool = False) 
             if not isinstance(datos, dict) or not isinstance(datos.get(campo), str):
                 problemas.append(f"falta el campo de texto «{campo}» en la respuesta")
                 continue
-            problemas += [f"{campo}: {p}" for p in COMPROBACIONES[nombre](entrada, datos[campo])]
+            base = entrada_json[campo] if isinstance(entrada_json, dict) and isinstance(entrada_json.get(campo), str) else entrada
+            problemas += [f"{campo}: {p}" for p in COMPROBACIONES[nombre](base, datos[campo])]
         else:
             problemas += COMPROBACIONES[nombre](entrada, salida)
     return problemas
