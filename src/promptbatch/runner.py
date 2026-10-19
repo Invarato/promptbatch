@@ -90,12 +90,15 @@ def guardar(salida: Path, t: Trabajo, tarea: Tarea, texto: str, uso, parada: str
 
 def estimar(client, tarea: Tarea, trabajos: list[Trabajo], variables: dict | None, precios: dict, batch: bool, contexto=None) -> dict:
     """Cuenta los tokens de entrada (gratis, sin generar nada). La salida se estima igual que la entrada."""
-    entrada = 0
+    entrada = salida = 0
     for t in trabajos:
         p = parametros(tarea, t.entrada, t.fichero.stem, variables, contexto)
         extra = {k: p[k] for k in ("system", "output_config") if k in p}
-        entrada += client.messages.count_tokens(model=p["model"], messages=p["messages"], **extra).input_tokens
-    salida = entrada   # estimación burda; el coste real queda en .meta/
+        n = client.messages.count_tokens(model=p["model"], messages=p["messages"], **extra).input_tokens
+        entrada += n
+        # Salida: como mucho la entrada (traducir, corregir) y nunca más que max_tokens (clasificar, resumir).
+        # Es un techo, no una predicción: el coste real queda en .meta/.
+        salida += min(n, tarea.max_tokens)
     return {"ficheros": len(trabajos), "tokens_entrada": entrada, "tokens_salida_estimados": salida,
             "coste_estimado_usd": config.coste(precios, tarea.model, entrada, salida, batch)}
 
