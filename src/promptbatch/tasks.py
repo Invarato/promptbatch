@@ -11,6 +11,8 @@
     tools = ["web_fetch"]   # opcional: herramientas del servidor (web_fetch, web_search); las ejecuta Anthropic
     tool_max_uses = 20      # opcional: máximo de usos de cada herramienta por fichero
     fetch_max_tokens = 3000 # opcional: tokens máximos de cada página descargada (se cobran como entrada)
+    images = "imagenes"     # opcional: la entrada es JSON y ese campo lista rutas de imágenes que se adjuntan
+                            # (en orden, antes del prompt; rutas relativas a la carpeta del fichero de entrada)
     +++
     Texto del system prompt (opcional)
     ---prompt---
@@ -46,6 +48,7 @@ class Tarea:
     herramientas: list[str] = field(default_factory=list)
     max_usos: int = 20
     max_tokens_pagina: int = 3000
+    campo_imagenes: str | None = None
 
     @property
     def extension_salida(self) -> str | None:
@@ -85,7 +88,7 @@ def cargar(ruta: str | Path) -> Tarea:
     system, _, prompt = texto.partition(SEPARADOR) if SEPARADOR in texto else ("", "", texto)
     if "{{contenido}}" not in prompt:
         raise SystemExit(f"{ruta}: el prompt de la tarea debe llevar {{{{contenido}}}}")
-    desconocidas = set(cab) - {"model", "max_tokens", "effort", "checks", "extensions", "context", "schema", "tools", "tool_max_uses", "fetch_max_tokens"}
+    desconocidas = set(cab) - {"model", "max_tokens", "effort", "checks", "extensions", "context", "schema", "tools", "tool_max_uses", "fetch_max_tokens", "images"}
     malas = set(cab.get("tools", [])) - set(HERRAMIENTAS)
     if malas:
         raise SystemExit(f"{ruta}: herramientas desconocidas: {', '.join(sorted(malas))} (hay: {', '.join(HERRAMIENTAS)})")
@@ -106,6 +109,7 @@ def cargar(ruta: str | Path) -> Tarea:
         herramientas=list(cab.get("tools", [])),
         max_usos=int(cab.get("tool_max_uses", 20)),
         max_tokens_pagina=int(cab.get("fetch_max_tokens", 3000)),
+        campo_imagenes=cab.get("images"),
     )
 
 

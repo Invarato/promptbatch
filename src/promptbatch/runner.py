@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -15,6 +16,24 @@ import anthropic
 
 from . import checks, config
 from .tasks import Tarea
+
+
+TIPOS_IMAGEN = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+
+
+def bloques_imagenes(tarea: Tarea, entrada: str, carpeta: Path) -> list[dict]:
+    """Bloques de imagen (base64) de las rutas que lista el campo `images` de una entrada JSON."""
+    if not tarea.campo_imagenes:
+        return []
+    rutas = json.loads(entrada).get(tarea.campo_imagenes) or []
+    bloques = []
+    for r in rutas:
+        f = Path(r) if Path(r).is_absolute() else carpeta / r
+        tipo = TIPOS_IMAGEN.get(f.suffix.lower())
+        if not tipo or not f.is_file():
+            raise ValueError(f"imagen que no existe o de tipo no admitido: {f}")
+        bloques.append({"type": "image", "source": {"type": "base64", "media_type": tipo, "data": base64.b64encode(f.read_bytes()).decode()}})
+    return bloques
 
 
 @dataclass
@@ -36,11 +55,13 @@ def nombre_salida(tarea: Tarea, fichero: Path) -> str:
     return fichero.stem + tarea.extension_salida if tarea.extension_salida else fichero.name
 
 
-def parametros(tarea: Tarea, entrada: str, nombre: str, variables: dict | None, contexto: list[Path] | None = None) -> dict:
+def parametros(tarea: Tarea, entrada: str, nombre: str, variables: dict | None, contexto: list[Path] | None = None, carpeta: Path | None = None) -> dict:
+    texto = tarea.construir(entrada, nombre, variables)
+    imagenes = bloques_imagenes(tarea, entrada, carpeta or Path("."))
     p: dict = {
         "model": tarea.model,
         "max_tokens": tarea.max_tokens,
-        "messages": [{"role": "user", "content": tarea.construir(entrada, nombre, variables)}],
+        "messages": [{"role": "user", "content": [*imagenes, {"type": "text", "text": texto}] if imagenes else texto}],
     }
     system = tarea.system_completo(contexto)
     if system:
@@ -100,7 +121,7 @@ def estimar(client, tarea: Tarea, trabajos: list[Trabajo], variables: dict | Non
     """Cuenta los tokens de entrada (gratis, sin generar nada). La salida se estima igual que la entrada."""
     entrada = salida = 0
     for t in trabajos:
-        p = parametros(tarea, t.entrada, t.fichero.stem, variables, contexto)
+        p = parametros(tarea, t.entrada, t.fichero.stem, variables, contexto, t.fichero.parent)
         extra = {k: p[k] for k in ("system", "output_config") if k in p}
         n = client.messages.count_tokens(model=p["model"], messages=p["messages"], **extra).input_tokens
         entrada += n
@@ -127,7 +148,7 @@ def ejecutar(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variab
         return client.messages.create(**p)
 
     def una(t: Trabajo):
-        p = parametros(tarea, t.entrada, t.fichero.stem, variables, contexto)
+        p = parametros(tarea, t.entrada, t.fichero.stem, variables, contexto, t.fichero.parent)
         m = llamar(p)
         uso = [m.usage]
         # Con herramientas del servidor, la respuesta puede pararse (pause_turn): se reenvía tal cual y el
@@ -181,7 +202,7 @@ def enviar_lote(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, var
     from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
     from anthropic.types.messages.batch_create_params import Request
 
-    reqs = [Request(custom_id=t.custom_id, params=MessageCreateParamsNonStreaming(**parametros(tarea, t.entrada, t.fichero.stem, variables, contexto))) for t in trabajos]
+    reqs = [Request(custom_id=t.custom_id, params=MessageCreateParamsNonStreaming(**parametros(tarea, t.entrada, t.fichero.stem, variables, contexto, t.fichero.parent))) for t in trabajos]
     lote = client.messages.batches.create(requests=reqs)
     salida.mkdir(parents=True, exist_ok=True)
     (salida / ".batch.json").write_text(json.dumps({

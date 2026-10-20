@@ -50,6 +50,8 @@ Ver [tasks/ejemplo-resumen.md](tasks/ejemplo-resumen.md). Sin `model`, se usa `c
   sirven aunque el equipo que lanza la tarea no tenga acceso a internet. `web_fetch` solo descarga URLs que
   aparezcan en el prompt. Límites: `tool_max_uses` y `fetch_max_tokens` (lo descargado se cobra como entrada).
   Si la respuesta se para a medias (`pause_turn`), en directo se reanuda sola; en lote va a `_revisar/`.
+- **Imágenes** (`images = "campo"`): la entrada es JSON y ese campo lista rutas de imágenes (relativas a la carpeta
+  del fichero) que se adjuntan, en orden, antes del prompt. Para describir imágenes, texto alternativo, etc.
 - **Esquema** (`schema`): la API devuelve JSON que cumple el esquema (salida estructurada). Útil para devolver
   varios campos a la vez (título, slug, meta descripción, contenido) o listas de correcciones.
 

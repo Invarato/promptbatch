@@ -112,3 +112,16 @@ def test_extraer_texto_tras_herramientas():
     class M:
         content = [B("text", "Voy a mirar."), B("server_tool_use"), B("web_fetch_tool_result"), B("text", '{"ok": 1}')]
     assert runner.extraer_texto(M()) == '{"ok": 1}'
+
+
+def test_imagenes_adjuntas(tmp_path):
+    (tmp_path / "a.png").write_bytes(b"\x89PNG\r\n")
+    f = tmp_path / "t.md"
+    f.write_text('+++\nimages = "imagenes"\n+++\n{{contenido}}')
+    t = tasks.cargar(f)
+    entrada = '{"imagenes": ["a.png"], "texto": "x"}'
+    p = runner.parametros(t, entrada, "n", None, None, tmp_path)
+    c = p["messages"][0]["content"]
+    assert c[0]["type"] == "image" and c[0]["source"]["media_type"] == "image/png" and c[-1]["type"] == "text"
+    with pytest.raises(ValueError):
+        runner.parametros(t, '{"imagenes": ["no.png"]}', "n", None, None, tmp_path)
