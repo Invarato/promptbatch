@@ -13,6 +13,8 @@ import contextlib
 import io
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -29,6 +31,9 @@ servidor = MCPServer(
         "disponibles están en el recurso promptbatch://tareas."
     ),
 )
+
+
+_en_curso: dict[str, dict] = {}   # carpeta de salida -> trabajo en segundo plano (modo directo)
 
 
 def _silencioso(f, *a, **k):
@@ -74,9 +79,22 @@ def lanzar(
             return resumen + f" No se envía: supera max_coste (${max_coste})."
         lote = runner.enviar_lote(client, t, trabajos, sal, variables, ctx)
         return resumen + f" Lote enviado: {lote}. Usa consultar(salida=\"{salida}\") más tarde."
-    _, log = _silencioso(runner.ejecutar, client, t, trabajos, sal, variables, precios, 4, max_coste, ctx)
-    errores = [l for l in log.splitlines() if l.startswith(("[ERROR]", "**"))]
-    return resumen + "\n" + json.dumps(runner.informe(sal), ensure_ascii=False) + ("\n" + "\n".join(errores[:5]) if errores else "")
+    # En segundo plano: una tarea larga no debe dejar colgada la herramienta (el cliente MCP corta por inactividad).
+    clave = str(sal.resolve())
+    if clave in _en_curso and _en_curso[clave]["hilo"].is_alive():
+        return f"Ya hay un trabajo en curso en {salida}: usa consultar."
+    estado = {"total": len(trabajos), "inicio": time.time(), "log": "", "error": None}
+
+    def trabajar():
+        try:
+            estado["log"] = runner.ejecutar(client, t, trabajos, sal, variables, precios, 4, max_coste, ctx, silencioso=True)
+        except Exception as e:   # noqa: BLE001 — se informa en consultar
+            estado["error"] = f"{type(e).__name__}: {e}"
+
+    estado["hilo"] = threading.Thread(target=trabajar, daemon=True)
+    estado["hilo"].start()
+    _en_curso[clave] = estado
+    return resumen + f" En marcha en segundo plano ({len(trabajos)} ficheros): usa consultar(salida=\"{salida}\") para ver el avance."
 
 
 @servidor.tool()
@@ -84,6 +102,13 @@ def consultar(salida: str) -> str:
     """Estado de una carpeta de salida. Si tiene un lote en curso dice cómo va; si el lote ha terminado, recoge
     los resultados. Devuelve el resumen: hechos, a revisar (con el motivo), coste y tokens."""
     sal = Path(salida)
+    trabajo = _en_curso.get(str(sal.resolve()))
+    if trabajo:
+        hechos = len(list((sal / ".meta").glob("*.json"))) if (sal / ".meta").is_dir() else 0
+        if trabajo["error"]:
+            return f"El trabajo falló: {trabajo['error']}. " + json.dumps(runner.informe(sal), ensure_ascii=False)
+        if trabajo["hilo"].is_alive():
+            return f"En curso: {hechos} ficheros con resultado (de {trabajo['total']} lanzados), {time.time() - trabajo['inicio']:.0f} s."
     if (sal / ".batch.json").exists():
         client = config.cliente()
         info, lote = runner.estado_lote(client, sal)

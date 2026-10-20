@@ -111,13 +111,17 @@ def estimar(client, tarea: Tarea, trabajos: list[Trabajo], variables: dict | Non
             "coste_estimado_usd": config.coste(precios, tarea.model, entrada, salida, batch)}
 
 
-def ejecutar(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variables, precios, concurrencia: int, max_coste: float | None, contexto=None) -> float:
-    """Una petición por fichero, varias a la vez. Para si el gasto llega a max_coste. Devuelve lo gastado."""
+def ejecutar(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variables, precios, concurrencia: int, max_coste: float | None, contexto=None, silencioso: bool = False) -> float:
+    """Una petición por fichero, varias a la vez. Para si el gasto llega a max_coste. Devuelve lo gastado.
+    `silencioso`: no escribe nada por stdout ni stderr (en el servidor MCP, stdout es el canal del protocolo)."""
+    decir = (lambda *a, **k: None) if silencioso else print
     gastado = 0.0
     parar = False
 
     def llamar(p):
-        if tarea.max_tokens > 16000:   # el SDK exige streaming para respuestas muy largas
+        # Streaming si la respuesta es muy larga (el SDK lo exige) o si hay herramientas del servidor (sin él, una
+        # petición que descarga muchas páginas puede quedarse esperando hasta el tiempo límite y reintentarse).
+        if tarea.max_tokens > 16000 or tarea.herramientas:
             with client.messages.stream(**p) as s:
                 return s.get_final_message()
         return client.messages.create(**p)
@@ -157,14 +161,14 @@ def ejecutar(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variab
                     meta = guardar(salida, t, tarea, extraer_texto(m), m.usage, m.stop_reason, precios, False)
                     gastado += meta["coste_usd"] or 0
                     marca = "REVISAR" if meta["problemas"] else "ok"
-                    print(f"[{marca}] {t.fichero.name}  ({meta['tokens_entrada']}→{meta['tokens_salida']} tokens, ${meta['coste_usd'] or 0:.4f})", flush=True)
+                    decir(f"[{marca}] {t.fichero.name}  ({meta['tokens_entrada']}→{meta['tokens_salida']} tokens, ${meta['coste_usd'] or 0:.4f})", flush=True)
                     for pr in meta["problemas"]:
-                        print(f"        · {pr}", flush=True)
+                        decir(f"        · {pr}", flush=True)
                 except anthropic.APIError as e:
-                    print(f"[ERROR] {t.fichero.name}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+                    decir(f"[ERROR] {t.fichero.name}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
                 if max_coste is not None and gastado >= max_coste and not parar:
                     parar = True
-                    print(f"** Tope de gasto alcanzado (${gastado:.2f} ≥ ${max_coste:.2f}): no se lanzan más.", flush=True)
+                    decir(f"** Tope de gasto alcanzado (${gastado:.2f} ≥ ${max_coste:.2f}): no se lanzan más.", flush=True)
                 if not parar:
                     lanzar()
                 break
