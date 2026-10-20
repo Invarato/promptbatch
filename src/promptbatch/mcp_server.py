@@ -36,6 +36,23 @@ servidor = MCPServer(
 _en_curso: dict[str, dict] = {}   # carpeta de salida -> trabajo en segundo plano (modo directo)
 
 
+def _sin_cuelgues(f):
+    """Un error dentro de una herramienta (también SystemExit, que usan tasks.cargar y config para avisar) se
+    devuelve como texto. Si escapara, el servidor se cerraría sin responder y el cliente esperaría hasta su
+    tiempo límite."""
+    import functools
+
+    @functools.wraps(f)
+    def envoltura(*a, **k):
+        try:
+            return f(*a, **k)
+        except SystemExit as e:
+            return f"Error: {e}"
+        except Exception as e:   # noqa: BLE001
+            return f"Error: {type(e).__name__}: {e}"
+    return envoltura
+
+
 def _silencioso(f, *a, **k):
     """El runner escribe por stdout, que en MCP es el canal del protocolo: se captura."""
     buf = io.StringIO()
@@ -45,6 +62,7 @@ def _silencioso(f, *a, **k):
 
 
 @servidor.tool()
+@_sin_cuelgues
 def lanzar(
     tarea: str,
     entradas: list[str],
@@ -98,6 +116,7 @@ def lanzar(
 
 
 @servidor.tool()
+@_sin_cuelgues
 def consultar(salida: str) -> str:
     """Estado de una carpeta de salida. Si tiene un lote en curso dice cómo va; si el lote ha terminado, recoge
     los resultados. Devuelve el resumen: hechos, a revisar (con el motivo), coste y tokens."""
