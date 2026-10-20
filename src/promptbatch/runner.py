@@ -25,7 +25,11 @@ class Trabajo:
 
 
 def extraer_texto(mensaje) -> str:
-    return "".join(b.text for b in mensaje.content if b.type == "text")
+    """El texto final de la respuesta: con herramientas, el que va después del último bloque que no es texto
+    (lo anterior son comentarios del modelo entre llamadas)."""
+    bloques = list(mensaje.content)
+    ultimo = max((i for i, b in enumerate(bloques) if b.type != "text"), default=-1)
+    return "".join(b.text for b in bloques[ultimo + 1:] if b.type == "text")
 
 
 def nombre_salida(tarea: Tarea, fichero: Path) -> str:
@@ -43,6 +47,8 @@ def parametros(tarea: Tarea, entrada: str, nombre: str, variables: dict | None, 
         # El system (con la guía y el glosario) se repite en todas las peticiones: con caché se paga entero
         # solo la primera vez (las demás leen a 0,1×). Debe ser idéntico byte a byte: nada variable aquí.
         p["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+    if tarea.herramientas:
+        p["tools"] = tarea.definicion_herramientas()
     oc = {}
     if tarea.effort:
         oc["effort"] = tarea.effort
@@ -70,6 +76,8 @@ def guardar(salida: Path, t: Trabajo, tarea: Tarea, texto: str, uso, parada: str
         problemas.append("respuesta cortada por max_tokens: súbelo en la tarea")
     if parada == "refusal":
         problemas.append("la API rechazó la petición (refusal)")
+    if parada == "pause_turn":
+        problemas.append("se quedó a medias usando herramientas (pause_turn): relánzalo en directo")
     destino = salida / ("_revisar" if problemas else "") / nombre_salida(tarea, t.fichero)
     destino.parent.mkdir(parents=True, exist_ok=True)
     destino.write_text(texto, encoding="utf-8")
@@ -108,12 +116,28 @@ def ejecutar(client, tarea: Tarea, trabajos: list[Trabajo], salida: Path, variab
     gastado = 0.0
     parar = False
 
-    def una(t: Trabajo):
-        p = parametros(tarea, t.entrada, t.fichero.stem, variables, contexto)
+    def llamar(p):
         if tarea.max_tokens > 16000:   # el SDK exige streaming para respuestas muy largas
             with client.messages.stream(**p) as s:
-                return t, s.get_final_message()
-        return t, client.messages.create(**p)
+                return s.get_final_message()
+        return client.messages.create(**p)
+
+    def una(t: Trabajo):
+        p = parametros(tarea, t.entrada, t.fichero.stem, variables, contexto)
+        m = llamar(p)
+        uso = [m.usage]
+        # Con herramientas del servidor, la respuesta puede pararse (pause_turn): se reenvía tal cual y el
+        # servidor continúa donde lo dejó. Hasta 5 veces.
+        for _ in range(5):
+            if m.stop_reason != "pause_turn":
+                break
+            p = {**p, "messages": [*p["messages"], {"role": "assistant", "content": m.content}]}
+            m = llamar(p)
+            uso.append(m.usage)
+        if len(uso) > 1:   # sumar el consumo de todas las vueltas
+            for campo in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+                setattr(m.usage, campo, sum(getattr(u, campo, 0) or 0 for u in uso))
+        return t, m
 
     with ThreadPoolExecutor(max_workers=concurrencia) as pool:
         pendientes = {}

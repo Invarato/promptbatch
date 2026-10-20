@@ -46,6 +46,10 @@ Ver [tasks/ejemplo-resumen.md](tasks/ejemplo-resumen.md). Sin `model`, se usa `c
 
 - **Contexto** (`context`, o `--context fichero` en la línea de órdenes): guías de estilo, glosarios… Van al
   system prompt, que se cachea: a partir de la segunda petición se cobran a 0,1× (mínimo cacheable: 512 tokens).
+- **Herramientas del servidor** (`tools = ["web_fetch"]` o `"web_search"`): las ejecuta Anthropic, así que
+  sirven aunque el equipo que lanza la tarea no tenga acceso a internet. `web_fetch` solo descarga URLs que
+  aparezcan en el prompt. Límites: `tool_max_uses` y `fetch_max_tokens` (lo descargado se cobra como entrada).
+  Si la respuesta se para a medias (`pause_turn`), en directo se reanuda sola; en lote va a `_revisar/`.
 - **Esquema** (`schema`): la API devuelve JSON que cumple el esquema (salida estructurada). Útil para devolver
   varios campos a la vez (título, slug, meta descripción, contenido) o listas de correcciones.
 

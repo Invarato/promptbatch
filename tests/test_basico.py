@@ -92,3 +92,23 @@ def test_check_sobre_campo_json():
 def test_check_campo_contra_campo_de_entrada_json():
     entrada = '{"titulo": "T", "contenido": "<p><a href=\\"u\\">x</a></p>"}'
     assert checks.pasar(["html:contenido"], entrada, '{"contenido": "<p><a href=\\"u\\">y</a></p>"}', es_json=True) == []
+
+
+def test_tarea_con_herramientas(tmp_path):
+    f = tmp_path / "t.md"
+    f.write_text('+++\ntools = ["web_fetch"]\ntool_max_uses = 5\nfetch_max_tokens = 1000\n+++\n{{contenido}}')
+    t = tasks.cargar(f)
+    p = runner.parametros(t, "x", "a", None)
+    assert p["tools"] == [{"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5, "max_content_tokens": 1000}]
+    f.write_text('+++\ntools = ["navegador"]\n+++\n{{contenido}}')
+    with pytest.raises(SystemExit):
+        tasks.cargar(f)
+
+
+def test_extraer_texto_tras_herramientas():
+    class B:
+        def __init__(self, type, text=""):
+            self.type, self.text = type, text
+    class M:
+        content = [B("text", "Voy a mirar."), B("server_tool_use"), B("web_fetch_tool_result"), B("text", '{"ok": 1}')]
+    assert runner.extraer_texto(M()) == '{"ok": 1}'

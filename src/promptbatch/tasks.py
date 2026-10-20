@@ -8,6 +8,9 @@
     extensions = [".html"]  # opcional: qué ficheros coger de una carpeta
     context = ["guia.md"]   # opcional: ficheros que se añaden al system prompt (cacheado), rutas relativas a la tarea
     schema = "esquema.json" # opcional: la respuesta es JSON que cumple este esquema; la salida se guarda como .json
+    tools = ["web_fetch"]   # opcional: herramientas del servidor (web_fetch, web_search); las ejecuta Anthropic
+    tool_max_uses = 20      # opcional: máximo de usos de cada herramienta por fichero
+    fetch_max_tokens = 3000 # opcional: tokens máximos de cada página descargada (se cobran como entrada)
     +++
     Texto del system prompt (opcional)
     ---prompt---
@@ -22,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SEPARADOR = "---prompt---"
+# Herramientas del servidor: las ejecuta Anthropic (el equipo que lanza la tarea no necesita acceso a internet).
+HERRAMIENTAS = {"web_fetch": "web_fetch_20260209", "web_search": "web_search_20260209"}
 MODELO_POR_DEFECTO = "claude-opus-5-5"
 
 
@@ -38,11 +43,23 @@ class Tarea:
     contexto: list[Path] = field(default_factory=list)
     esquema: dict | None = None
     ruta: Path | None = None
+    herramientas: list[str] = field(default_factory=list)
+    max_usos: int = 20
+    max_tokens_pagina: int = 3000
 
     @property
     def extension_salida(self) -> str | None:
         """Con esquema, la salida es JSON; sin él, conserva la extensión de la entrada."""
         return ".json" if self.esquema else None
+
+    def definicion_herramientas(self) -> list[dict]:
+        r = []
+        for h in self.herramientas:
+            d = {"type": HERRAMIENTAS[h], "name": h, "max_uses": self.max_usos}
+            if h == "web_fetch":
+                d["max_content_tokens"] = self.max_tokens_pagina
+            r.append(d)
+        return r
 
     def system_completo(self, extra: list[Path] | None = None) -> str:
         partes = [self.system] if self.system else []
@@ -68,7 +85,10 @@ def cargar(ruta: str | Path) -> Tarea:
     system, _, prompt = texto.partition(SEPARADOR) if SEPARADOR in texto else ("", "", texto)
     if "{{contenido}}" not in prompt:
         raise SystemExit(f"{ruta}: el prompt de la tarea debe llevar {{{{contenido}}}}")
-    desconocidas = set(cab) - {"model", "max_tokens", "effort", "checks", "extensions", "context", "schema"}
+    desconocidas = set(cab) - {"model", "max_tokens", "effort", "checks", "extensions", "context", "schema", "tools", "tool_max_uses", "fetch_max_tokens"}
+    malas = set(cab.get("tools", [])) - set(HERRAMIENTAS)
+    if malas:
+        raise SystemExit(f"{ruta}: herramientas desconocidas: {', '.join(sorted(malas))} (hay: {', '.join(HERRAMIENTAS)})")
     if desconocidas:
         raise SystemExit(f"{ruta}: claves desconocidas en la cabecera: {', '.join(sorted(desconocidas))}")
     return Tarea(
@@ -83,6 +103,9 @@ def cargar(ruta: str | Path) -> Tarea:
         extensions=list(cab.get("extensions", [])),
         contexto=[_relativa(ruta, c) for c in cab.get("context", [])],
         esquema=json.loads(_relativa(ruta, cab["schema"]).read_text(encoding="utf-8")) if "schema" in cab else None,
+        herramientas=list(cab.get("tools", [])),
+        max_usos=int(cab.get("tool_max_uses", 20)),
+        max_tokens_pagina=int(cab.get("fetch_max_tokens", 3000)),
     )
 
 
