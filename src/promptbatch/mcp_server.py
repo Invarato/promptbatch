@@ -104,7 +104,8 @@ def consultar(salida: str) -> str:
     sal = Path(salida)
     trabajo = _en_curso.get(str(sal.resolve()))
     if trabajo:
-        hechos = len(list((sal / ".meta").glob("*.json"))) if (sal / ".meta").is_dir() else 0
+        # Solo los resultados escritos desde que empezó este trabajo (la carpeta puede tener otros anteriores).
+        hechos = sum(1 for f in (sal / ".meta").glob("*.json") if f.stat().st_mtime >= trabajo["inicio"]) if (sal / ".meta").is_dir() else 0
         if trabajo["error"]:
             return f"El trabajo falló: {trabajo['error']}. " + json.dumps(runner.informe(sal), ensure_ascii=False)
         if trabajo["hilo"].is_alive():
