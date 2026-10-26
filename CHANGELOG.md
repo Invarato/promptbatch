@@ -17,7 +17,8 @@ First public release.
   are now computed request by request.
 - `promptbatch --version`.
 - Requires `anthropic>=2.3`.
-- Continuous integration (tests and lint on Python 3.11 to 3.13) and publishing to PyPI from GitHub releases.
+- Continuous integration (tests and lint on Python 3.11 to 3.13) and automatic publishing to PyPI, with its tag and
+  GitHub release, when the version in `pyproject.toml` changes on `main`.
 
 ## 0.1.0 — 2026-10-19
 

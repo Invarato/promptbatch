@@ -120,6 +120,9 @@ pytest
 ruff check src tests && ruff format --check src tests
 ```
 
+Para publicar una versión, sube `version` en `pyproject.toml` y añade su sección en `CHANGELOG.md`. Cuando llega a
+`main`, GitHub Actions la prueba, la publica en PyPI y crea su etiqueta y su *release* de GitHub.
+
 ## Licencia
 
 [MIT](LICENSE).
