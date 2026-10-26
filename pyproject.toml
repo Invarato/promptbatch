@@ -4,17 +4,38 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "promptbatch"
-version = "0.1.0"
-description = "Lanza un prompt (una «tarea») sobre muchos ficheros con la API de Anthropic, en directo o en lote (Batch API, a mitad de precio)."
+version = "0.2.0"
+description = "Run one prompt (a \"task\") over many files with the Anthropic API, directly or as a batch (Batch API, half price), with cost estimates, spending limits and output checks."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = ["anthropic>=1.0"]
+authors = [{ name = "Ramón Invarato" }]
+keywords = ["anthropic", "claude", "llm", "batch", "translation", "mcp", "prompt", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+    "Topic :: Utilities",
+]
+dependencies = ["anthropic>=2.3"]
 
 [project.optional-dependencies]
-dev = ["pytest"]
 mcp = ["mcp>=2.3"]
+dev = ["pytest", "ruff", "build"]
+
+[project.urls]
+Homepage = "https://github.com/Invarato/promptbatch"
+Repository = "https://github.com/Invarato/promptbatch"
+Issues = "https://github.com/Invarato/promptbatch/issues"
+Changelog = "https://github.com/Invarato/promptbatch/blob/main/CHANGELOG.md"
 
 [project.scripts]
 promptbatch = "promptbatch.cli:main"
@@ -25,3 +46,11 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "BLE", "UP", "RUF"]
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]

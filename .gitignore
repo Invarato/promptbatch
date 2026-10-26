@@ -8,3 +8,7 @@ salida*/
 out/
 *.key
 .env
+
+# Build output
+dist/
+build/

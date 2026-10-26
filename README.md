@@ -1,104 +1,128 @@
 # promptbatch
 
-Lanza **una tarea** (un prompt) sobre **muchos ficheros** con la API de Anthropic: en directo, o en lote con la
-Batch API (la mitad de precio, resultado en menos de 24 h). Pensada para trabajos grandes y repetitivos:
-traducir cientos de artículos, revisar erratas, escribir meta descripciones, clasificar…
+[![Tests](https://github.com/Invarato/promptbatch/actions/workflows/tests.yml/badge.svg)](https://github.com/Invarato/promptbatch/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/promptbatch)](https://pypi.org/project/promptbatch/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-- **Sin nada específico de ningún proyecto:** las tareas son ficheros Markdown; tu proyecto aporta las suyas.
-- **Seguro de relanzar:** lo que ya está en la carpeta de salida no se rehace (ni se paga otra vez).
-- **Con control de gasto:** estima el coste antes (`--dry-run`) y para al llegar a `--max-cost`.
-- **Con comprobaciones:** si el resultado no pasa una comprobación (p. ej. el HTML cambió de etiquetas), va a `_revisar/` en lugar de a la salida.
+*[Leer en español](README.es.md)*
 
-## Instalación
+Run **one task** (a prompt) over **many files** with the Anthropic API: directly, or as a batch with the Batch API
+(half price, results within 24 hours). Built for large, repetitive jobs: translating hundreds of articles, fixing
+typos, writing meta descriptions, classifying…
+
+- **Nothing project-specific:** tasks are Markdown files; your project brings its own.
+- **Safe to relaunch:** whatever is already in the output folder is not redone (or paid for again).
+- **Spending under control:** it estimates the cost first (`--dry-run`) and stops at `--max-cost`.
+- **With checks:** if a result fails a check (for example, the HTML lost tags), it goes to `_review/` instead of the
+  output.
+- **For agents too:** an MCP server lets an agent such as Claude Code hand bulk work over to the API without passing
+  the content through its conversation.
+
+## Install
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -e .
+pip install promptbatch            # the command-line tool
+pip install 'promptbatch[mcp]'     # plus the MCP server
 ```
 
-## La clave de la API
+Or from source: `pip install 'git+https://github.com/Invarato/promptbatch'`. It needs Python 3.11 or later.
 
-Nunca va en el repositorio. Se busca, en este orden: la variable `ANTHROPIC_API_KEY`, la opción `--key-file`,
-la variable `PROMPTBATCH_KEY_FILE` o el fichero `~/.config/promptbatch/api.key` (con permisos `600`).
+## The API key
 
-## Una tarea
+It never goes into a repository. It is looked up in this order: the `ANTHROPIC_API_KEY` variable, the `--key-file`
+option, the `PROMPTBATCH_KEY_FILE` variable, or the file `~/.config/promptbatch/api.key` (with permissions `600`).
 
-Un fichero `.md` con cabecera TOML entre líneas `+++`, el system prompt (opcional) y, tras `---prompt---`, el
-prompt, con `{{contenido}}` (el fichero) y `{{nombre}}`. Más variables con `--var clave=valor`.
+## A task
+
+A `.md` file with a TOML header between `+++` lines, the system prompt (optional) and, after `---prompt---`, the
+prompt, with `{{content}}` (the file) and `{{name}}` (its name without extension). More variables with
+`--var key=value`.
 
 ```markdown
 +++
 model = "claude-sonnet-5-5"
 max_tokens = 16000
-effort = "low"          # low, medium, high, xhigh, max (en traducciones suele bastar low)
-checks = ["html:contenido"]  # comprobaciones: html, no-vacio; «nombre:campo» la aplica a un campo del JSON
-extensions = [".html"]  # qué ficheros coger de una carpeta
-context = ["guia-de-estilo.md", "glosario.md"]  # se añaden al system prompt (con caché)
-schema = "traduccion.schema.json"               # respuesta en JSON con este esquema (salida .json)
+effort = "low"                     # low, medium, high, xhigh, max (low is usually enough for translations)
+checks = ["html:content"]          # checks: html, non-empty; "name:field" applies it to a field of the JSON answer
+extensions = [".html"]             # which files to take from a folder
+context = ["style-guide.md", "glossary.md"]   # appended to the system prompt (cached)
+schema = "translation.schema.json"            # JSON answer matching this schema (the output is .json)
 +++
-Eres un traductor profesional…
+You are a professional translator…
 ---prompt---
-Traduce al {{idioma}} este HTML conservando todas las etiquetas:
+Translate this HTML into {{language}}, keeping every tag:
 
-{{contenido}}
+{{content}}
 ```
 
-Ver [tasks/ejemplo-resumen.md](tasks/ejemplo-resumen.md). Sin `model`, se usa `claude-opus-5-5`.
+See [tasks/example-summary.md](tasks/example-summary.md). Without `model`, `claude-opus-5-5` is used.
 
-- **Contexto** (`context`, o `--context fichero` en la línea de órdenes): guías de estilo, glosarios… Van al
-  system prompt, que se cachea: a partir de la segunda petición se cobran a 0,1× (mínimo cacheable: 512 tokens).
-- **Herramientas del servidor** (`tools = ["web_fetch"]` o `"web_search"`): las ejecuta Anthropic, así que
-  sirven aunque el equipo que lanza la tarea no tenga acceso a internet. `web_fetch` solo descarga URLs que
-  aparezcan en el prompt. Límites: `tool_max_uses` y `fetch_max_tokens` (lo descargado se cobra como entrada).
-  Si la respuesta se para a medias (`pause_turn`), en directo se reanuda sola; en lote va a `_revisar/`.
-- **Imágenes** (`images = "campo"`): la entrada es JSON y ese campo lista rutas de imágenes (relativas a la carpeta
-  del fichero) que se adjuntan, en orden, antes del prompt. Para describir imágenes, texto alternativo, etc.
-- **Esquema** (`schema`): la API devuelve JSON que cumple el esquema (salida estructurada). Útil para devolver
-  varios campos a la vez (título, slug, meta descripción, contenido) o listas de correcciones.
+- **Context** (`context`, or `--context file` on the command line): style guides, glossaries… They go into the system
+  prompt, which is cached: from the second request on they are billed at 0.1×. The minimum cacheable size depends on
+  the model (from 512 to 4096 tokens); below it, nothing is cached.
+- **Server tools** (`tools = ["web_fetch"]` or `"web_search"`): Anthropic runs them, so they work even if the machine
+  launching the task has no internet access. `web_fetch` only fetches URLs that appear in the prompt. Limits:
+  `tool_max_uses` and `fetch_max_tokens` (fetched content is billed as input). If an answer pauses halfway
+  (`pause_turn`), direct mode resumes it on its own; in a batch it goes to `_review/`.
+- **Images** (`images = "field"`): the input is JSON and that field lists image paths (relative to the input file's
+  folder), which are attached, in order, before the prompt. For describing images, alt text, etc.
+- **Schema** (`schema`): the API returns JSON that matches the schema (structured output). Useful to return several
+  fields at once (title, slug, meta description, content) or lists of corrections.
 
-## Uso
+## Usage
 
 ```bash
-# 1. Estimar sin gastar (solo cuenta tokens)
-promptbatch run tasks/mi-tarea.md entradas/ -o salida/ --dry-run
+# 1. Estimate without spending (it only counts tokens)
+promptbatch run tasks/my-task.md inputs/ -o output/ --dry-run
 
-# 2. Probar con 3 ficheros y un tope de gasto
-promptbatch run tasks/mi-tarea.md entradas/ -o salida/ --limit 3 --max-cost 1
+# 2. Try 3 files with a spending limit
+promptbatch run tasks/my-task.md inputs/ -o output/ --limit 3 --max-cost 1
 
-# 3. Todo, a mitad de precio con la Batch API
-promptbatch batch submit tasks/mi-tarea.md entradas/ -o salida/ --max-cost 20
-promptbatch batch status salida/
-promptbatch batch collect tasks/mi-tarea.md salida/
+# 3. Everything, at half price with the Batch API
+promptbatch batch submit tasks/my-task.md inputs/ -o output/ --max-cost 20
+promptbatch batch status output/
+promptbatch batch collect tasks/my-task.md output/
 ```
 
-En la salida: un fichero por entrada (mismo nombre); `_revisar/` con los que no pasaron las comprobaciones;
-`.meta/<fichero>.json` con tokens, coste y motivo de parada; `.batch.json` con el lote en curso.
+In the output: one file per input (same name); `_review/` with the ones that failed a check; `.meta/<file>.json` with
+tokens, cost and stop reason; `.batch.json` with the batch in progress.
 
-## Desde un agente (servidor MCP)
+## From an agent (MCP server)
 
-`promptbatch-mcp` expone dos herramientas y un recurso, para que un agente como Claude Code delegue el trabajo
-masivo sin pasar el contenido por su conversación (solo recibe resúmenes):
+`promptbatch-mcp` exposes two tools and a resource, so that an agent such as Claude Code can delegate bulk work
+without passing the content through its conversation (it only gets summaries):
 
-- `lanzar(tarea, entradas, salida, modo="estimar"|"directo"|"lote", limite, max_coste, variables, contexto, modelo)`
-- `consultar(salida)`: cómo va el lote; si ha terminado, lo recoge; resumen de hechos, a revisar y coste.
-- recurso `promptbatch://tareas`: las tareas de las carpetas de `PROMPTBATCH_TASK_DIRS`.
+- `launch(task, inputs, output, mode="estimate"|"direct"|"batch", limit, max_cost, variables, context, model)`.
+  To spend (`direct` or `batch`), `max_cost` in USD is required.
+- `status(output)`: how the batch is going; when it has finished, it collects it. Summary of done, to review and cost.
+- resource `promptbatch://tasks`: the tasks in the folders of `PROMPTBATCH_TASK_DIRS`.
 
 ```bash
-.venv/bin/pip install -e '.[mcp]'
 claude mcp add -s project promptbatch -e PROMPTBATCH_KEY_FILE=~/.config/promptbatch/api.key \
-  -e PROMPTBATCH_TASK_DIRS=./tasks -- "$PWD/.venv/bin/promptbatch-mcp"
+  -e PROMPTBATCH_TASK_DIRS=./tasks -- promptbatch-mcp
 ```
 
-La skill [skill/SKILL.md](skill/SKILL.md) le explica al agente cuándo y cómo usarlo (estimar antes, pedir
-permiso antes de gastar, probar con pocos, el resto en lote). Cópiala a `.claude/skills/promptbatch/` del proyecto.
+The skill [skill/SKILL.md](skill/SKILL.md) tells the agent when and how to use it (estimate first, ask before
+spending, try a few, the rest as a batch). Copy it to `.claude/skills/promptbatch/` in your project.
 
-## Costes
+## Costs
 
-Los precios que usa para estimar están en `config.py` (orientativos): compruébalos y, si cambian, pásalos con
-`--prices fichero.toml` (`["modelo"]` con `input` y `output` en USD por millón de tokens). El coste real queda
-en `.meta/`.
+The prices used for estimates are in `config.py` and are approximate: check them and, if they change, pass them with
+`--prices file.toml` (`["model"]` with `input` and `output` in USD per million tokens, and optionally `cache_read`).
+The real cost of each request is recorded in `.meta/`.
 
-## Desarrollo
+## Upgrading from 0.1
+
+See the [CHANGELOG](CHANGELOG.md): the MCP tools were renamed to English, and tasks written for 0.1 keep working.
+
+## Development
 
 ```bash
-.venv/bin/pip install -e '.[dev]' && .venv/bin/pytest
+pip install -e '.[dev,mcp]'
+pytest
+ruff check src tests && ruff format --check src tests
 ```
+
+## License
+
+[MIT](LICENSE).

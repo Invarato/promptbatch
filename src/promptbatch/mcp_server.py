@@ -1,15 +1,15 @@
-"""Servidor MCP de promptbatch: para que un agente (Claude Code) delegue trabajo masivo en la API.
+"""promptbatch MCP server: lets an agent (such as Claude Code) hand bulk work over to the API.
 
-Pocas herramientas y respuestas cortas, a propósito: las definiciones y las respuestas ocupan contexto del
-agente. Las herramientas devuelven resúmenes (cuántos, coste, qué revisar), nunca el contenido generado: si
-el agente quiere ver un resultado, lee el fichero.
+Few tools and short answers, on purpose: tool definitions and answers take up the agent's context. The tools return
+summaries (how many, cost, what to review), never the generated content: to see a result, the agent reads the file.
 
-    claude mcp add promptbatch -e PROMPTBATCH_KEY_FILE=… -e PROMPTBATCH_TASK_DIRS=… -- <venv>/bin/python -m promptbatch.mcp_server
+    claude mcp add promptbatch -e PROMPTBATCH_KEY_FILE=… -e PROMPTBATCH_TASK_DIRS=… -- <venv>/bin/promptbatch-mcp
 """
 
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import json
 import os
@@ -22,144 +22,151 @@ from mcp.server.mcpserver import MCPServer
 
 from . import config, runner, tasks
 
-servidor = MCPServer(
+server = MCPServer(
     "promptbatch",
     instructions=(
-        "Lanza una tarea (un prompt en un fichero .md) sobre muchos ficheros con la API de Anthropic y la "
-        "clave del usuario, sin pasar el contenido por esta conversación. Empieza siempre con modo «estimar»; "
-        "para muchos ficheros usa «lote» (mitad de precio, hasta 24 h) y luego «consultar». Las tareas "
-        "disponibles están en el recurso promptbatch://tareas."
+        "Runs a task (a prompt in a .md file) over many files with the Anthropic API and the user's key, without "
+        'passing the content through this conversation. Always start with mode "estimate" and show the estimate to '
+        'the user before spending; for many files use "batch" (half price, up to 24 h) and then "status". The '
+        "available tasks are in the promptbatch://tasks resource."
     ),
 )
 
+_running: dict[str, dict] = {}  # output folder -> background job (direct mode)
 
-_en_curso: dict[str, dict] = {}   # carpeta de salida -> trabajo en segundo plano (modo directo)
 
-
-def _sin_cuelgues(f):
-    """Un error dentro de una herramienta (también SystemExit, que usan tasks.cargar y config para avisar) se
-    devuelve como texto. Si escapara, el servidor se cerraría sin responder y el cliente esperaría hasta su
-    tiempo límite."""
-    import functools
+def _no_hang(f):
+    """An error inside a tool (also SystemExit, which tasks.load and config use to report problems) is returned as
+    text. If it escaped, the server would close without answering and the client would wait until its timeout."""
 
     @functools.wraps(f)
-    def envoltura(*a, **k):
+    def wrapper(*a, **k):
         try:
             return f(*a, **k)
         except SystemExit as e:
             return f"Error: {e}"
-        except Exception as e:   # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             return f"Error: {type(e).__name__}: {e}"
-    return envoltura
+
+    return wrapper
 
 
-def _silencioso(f, *a, **k):
-    """El runner escribe por stdout, que en MCP es el canal del protocolo: se captura."""
+def _quiet(f, *a, **k):
+    """The runner writes to stdout, which in MCP is the protocol channel: it is captured."""
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         r = f(*a, **k)
     return r, buf.getvalue()
 
 
-@servidor.tool()
-@_sin_cuelgues
-def lanzar(
-    tarea: str,
-    entradas: list[str],
-    salida: str,
-    modo: Literal["estimar", "directo", "lote"] = "estimar",
-    limite: int | None = None,
-    max_coste: float | None = None,
+@server.tool()
+@_no_hang
+def launch(
+    task: str,
+    inputs: list[str],
+    output: str,
+    mode: Literal["estimate", "direct", "batch"] = "estimate",
+    limit: int | None = None,
+    max_cost: float | None = None,
     variables: dict[str, str] | None = None,
-    contexto: list[str] | None = None,
-    modelo: str | None = None,
+    context: list[str] | None = None,
+    model: str | None = None,
 ) -> str:
-    """Ejecuta la tarea (ruta al .md) sobre los ficheros o carpetas de `entradas`, dejando un fichero por entrada
-    en `salida`. Lo ya hecho en `salida` se salta. Modos: «estimar» (solo cuenta tokens y coste, gratis),
-    «directo» (ahora; para pocos ficheros) o «lote» (Batch API: mitad de precio, consultar después).
-    `max_coste` en USD: en directo para al alcanzarlo; en lote no envía si la estimación lo supera."""
-    t = tasks.cargar(tarea)
-    if modelo:
-        t.model = modelo
-    sal = Path(salida)
-    trabajos = runner.preparar(tasks.ficheros_de_entrada(entradas, t.extensions), sal, False, t)[:limite]
-    if not trabajos:
-        return "Nada que hacer: todo está ya en la salida."
-    client = config.cliente()
-    precios = config.cargar_precios(os.environ.get("PROMPTBATCH_PRICES"))
-    ctx = [Path(c) for c in contexto or []]
-    est = runner.estimar(client, t, trabajos, variables, precios, modo == "lote", ctx)
-    resumen = f"{est['ficheros']} ficheros, {est['tokens_entrada']} tokens de entrada, coste estimado ≈ ${est['coste_estimado_usd'] or 0:.3f} ({t.model}{', en lote' if modo == 'lote' else ''})."
-    if modo == "estimar":
-        return resumen
-    if modo == "lote":
-        if max_coste is not None and (est["coste_estimado_usd"] or 0) > max_coste:
-            return resumen + f" No se envía: supera max_coste (${max_coste})."
-        lote = runner.enviar_lote(client, t, trabajos, sal, variables, ctx)
-        return resumen + f" Lote enviado: {lote}. Usa consultar(salida=\"{salida}\") más tarde."
-    # En segundo plano: una tarea larga no debe dejar colgada la herramienta (el cliente MCP corta por inactividad).
-    clave = str(sal.resolve())
-    if clave in _en_curso and _en_curso[clave]["hilo"].is_alive():
-        return f"Ya hay un trabajo en curso en {salida}: usa consultar."
-    estado = {"total": len(trabajos), "inicio": time.time(), "log": "", "error": None}
+    """Runs the task (path to its .md) over the files or folders in `inputs`, writing one file per input to `output`.
+    What is already in `output` is skipped. Modes: "estimate" (only counts tokens and cost, free), "direct" (now; for
+    a few files) or "batch" (Batch API: half price, check with status later). `max_cost` in USD is required to spend:
+    in direct mode it stops when reached; in batch mode nothing is submitted if the estimate is over it."""
+    t = tasks.load(task)
+    if model:
+        t.model = model
+    out = Path(output)
+    jobs = runner.prepare(tasks.input_files(inputs, t.extensions), out, False, t)[:limit]
+    if not jobs:
+        return "Nothing to do: everything is already in the output."
+    client = config.client()
+    prices = config.load_prices(os.environ.get("PROMPTBATCH_PRICES"))
+    ctx = [Path(c) for c in context or []]
+    est = runner.estimate(client, t, jobs, variables, prices, mode == "batch", ctx)
+    cost = est["estimated_cost_usd"]
+    summary = (
+        f"{est['files']} file{'' if est['files'] == 1 else 's'}, {est['input_tokens']} input tokens, estimated cost ≈ "
+        f"{f'${cost:.3f}' if cost is not None else 'unknown (no price for this model)'} "
+        f"({t.model}{', in batch' if mode == 'batch' else ''})."
+    )
+    if mode == "estimate":
+        return summary
+    if max_cost is None:
+        return summary + " Not launched: pass max_cost (USD) to spend, after the user agrees to the estimate."
+    if mode == "batch":
+        if cost is not None and cost > max_cost:
+            return summary + f" Not submitted: over max_cost (${max_cost})."
+        batch_id = runner.submit_batch(client, t, jobs, out, variables, ctx)
+        return summary + f' Batch submitted: {batch_id}. Use status(output="{output}") later.'
+    # In the background: a long job must not leave the tool hanging (MCP clients cut off idle calls).
+    key = str(out.resolve())
+    if key in _running and _running[key]["thread"].is_alive():
+        return f"There is already a job running in {output}: use status."
+    state = {"total": len(jobs), "start": time.time(), "log": "", "error": None}
 
-    def trabajar():
+    def work():
         try:
-            estado["log"] = runner.ejecutar(client, t, trabajos, sal, variables, precios, 4, max_coste, ctx, silencioso=True)
-        except Exception as e:   # noqa: BLE001 — se informa en consultar
-            estado["error"] = f"{type(e).__name__}: {e}"
+            state["log"] = runner.execute(client, t, jobs, out, variables, prices, 4, max_cost, ctx, quiet=True)
+        except Exception as e:  # noqa: BLE001 — reported by status
+            state["error"] = f"{type(e).__name__}: {e}"
 
-    estado["hilo"] = threading.Thread(target=trabajar, daemon=True)
-    estado["hilo"].start()
-    _en_curso[clave] = estado
-    return resumen + f" En marcha en segundo plano ({len(trabajos)} ficheros): usa consultar(salida=\"{salida}\") para ver el avance."
-
-
-@servidor.tool()
-@_sin_cuelgues
-def consultar(salida: str) -> str:
-    """Estado de una carpeta de salida. Si tiene un lote en curso dice cómo va; si el lote ha terminado, recoge
-    los resultados. Devuelve el resumen: hechos, a revisar (con el motivo), coste y tokens."""
-    sal = Path(salida)
-    trabajo = _en_curso.get(str(sal.resolve()))
-    if trabajo:
-        # Solo los resultados escritos desde que empezó este trabajo (la carpeta puede tener otros anteriores).
-        hechos = sum(1 for f in (sal / ".meta").glob("*.json") if f.stat().st_mtime >= trabajo["inicio"]) if (sal / ".meta").is_dir() else 0
-        if trabajo["error"]:
-            return f"El trabajo falló: {trabajo['error']}. " + json.dumps(runner.informe(sal), ensure_ascii=False)
-        if trabajo["hilo"].is_alive():
-            return f"En curso: {hechos} ficheros con resultado (de {trabajo['total']} lanzados), {time.time() - trabajo['inicio']:.0f} s."
-    if (sal / ".batch.json").exists():
-        client = config.cliente()
-        info, lote = runner.estado_lote(client, sal)
-        if lote.processing_status != "ended":
-            c = lote.request_counts
-            return f"Lote {info['id']} en curso: {c.processing} pendientes, {c.succeeded} hechos, {c.errored} con error."
-        if not info.get("recogido"):
-            if not info.get("ruta_tarea"):
-                return f"Lote {info['id']} terminado, pero no sé qué tarea usó: recógelo con «promptbatch batch collect»."
-            precios = config.cargar_precios(os.environ.get("PROMPTBATCH_PRICES"))
-            _silencioso(runner.recoger_lote, client, tasks.cargar(info["ruta_tarea"]), sal, precios)
-            info["recogido"] = True
-            (sal / ".batch.json").write_text(json.dumps(info, indent=1))
-    return json.dumps(runner.informe(sal), ensure_ascii=False)
+    state["thread"] = threading.Thread(target=work, daemon=True)
+    state["thread"].start()
+    _running[key] = state
+    return summary + f' Running in the background ({len(jobs)} files): use status(output="{output}") to follow it.'
 
 
-@servidor.resource("promptbatch://tareas", name="tareas", description="Tareas disponibles: ruta y para qué sirve")
-def tareas_disponibles() -> str:
-    dirs = [d for d in os.environ.get("PROMPTBATCH_TASK_DIRS", "").split(os.pathsep) if d] or ["tasks"]
-    lineas = []
-    for d in dirs:
+@server.tool()
+@_no_hang
+def status(output: str) -> str:
+    """Status of an output folder. With a batch running, how it is going; if the batch has finished, it collects the
+    results. Returns the summary: done, to review (with the reason), cost and tokens."""
+    out = Path(output)
+    job = _running.get(str(out.resolve()))
+    if job:
+        # Only the results written since this job started (the folder may hold older ones).
+        meta = out / ".meta"
+        done = sum(1 for f in meta.glob("*.json") if f.stat().st_mtime >= job["start"]) if meta.is_dir() else 0
+        if job["error"]:
+            return f"The job failed: {job['error']}. " + json.dumps(runner.report(out), ensure_ascii=False)
+        if job["thread"].is_alive():
+            return f"Running: {done} files with a result (of {job['total']} launched), {time.time() - job['start']:.0f} s."
+    if (out / ".batch.json").exists():
+        client = config.client()
+        info, batch = runner.batch_status(client, out)
+        if batch.processing_status != "ended":
+            c = batch.request_counts
+            return f"Batch {info['id']} running: {c.processing} pending, {c.succeeded} done, {c.errored} with errors."
+        if not info.get("collected"):
+            if not info.get("task_path"):
+                return f'Batch {info["id"]} finished, but I don\'t know which task it used: collect it with "promptbatch batch collect".'
+            prices = config.load_prices(os.environ.get("PROMPTBATCH_PRICES"))
+            _quiet(runner.collect_batch, client, tasks.load(info["task_path"]), out, prices)
+            stored = json.loads((out / ".batch.json").read_text())
+            stored["collected"] = True
+            (out / ".batch.json").write_text(json.dumps(stored, indent=1))
+    return json.dumps(runner.report(out), ensure_ascii=False)
+
+
+@server.resource("promptbatch://tasks", name="tasks", description="Available tasks: path and what each one is for")
+def available_tasks() -> str:
+    folders = [d for d in os.environ.get("PROMPTBATCH_TASK_DIRS", "").split(os.pathsep) if d] or ["tasks"]
+    lines = []
+    for d in folders:
         for f in sorted(Path(d).expanduser().glob("*.md")):
-            texto = f.read_text(encoding="utf-8")
-            desc = next((l.lstrip("# ").strip() for l in texto.splitlines()[1:6] if l.startswith("#")), "")
-            if texto.startswith("+++"):
-                lineas.append(f"- {f.resolve()}: {desc}")
-    return "\n".join(lineas) or "No hay tareas en PROMPTBATCH_TASK_DIRS."
+            text = f.read_text(encoding="utf-8")
+            description = next((line.lstrip("# ").strip() for line in text.splitlines()[1:6] if line.startswith("#")), "")
+            if text.startswith("+++"):
+                lines.append(f"- {f.resolve()}: {description}")
+    return "\n".join(lines) or "No tasks in PROMPTBATCH_TASK_DIRS."
 
 
 def main():
-    servidor.run("stdio")
+    server.run("stdio")
 
 
 if __name__ == "__main__":

@@ -1,28 +1,31 @@
 ---
 name: promptbatch
-description: Delegar trabajo masivo o repetitivo con IA (traducir, revisar, clasificar o resumir muchos ficheros) en la API de Anthropic mediante el MCP de promptbatch, en vez de hacerlo en la conversación. Úsala cuando la misma tarea se aplica a más de unos pocos ficheros o la salida es larga.
+description: Hand bulk or repetitive AI work (translating, reviewing, classifying or summarizing many files) over to the Anthropic API through the promptbatch MCP server, instead of doing it in the conversation. Use it when the same task applies to more than a few files or the output is long.
 ---
 
-# Delegar en promptbatch
+# Delegating to promptbatch
 
-Hacerlo en la conversación gasta el contexto y los tokens de la sesión. Con el MCP `promptbatch`, el trabajo
-lo hace la API con la clave del usuario (en lote, a mitad de precio) y aquí solo llegan resúmenes.
+Doing it in the conversation uses up the session's context and tokens. With the `promptbatch` MCP server, the API does
+the work with the user's key (as a batch, at half price) and only summaries come back here.
 
-## Cuándo
-- La misma instrucción sobre muchos ficheros (más de 3–5) o con salidas largas: traducir, corregir erratas,
-  clasificar, generar descripciones, resumir.
-- No para tareas que necesitan iterar con el usuario o decisiones caso a caso: eso, en la conversación.
+## When
 
-## Cómo
-1. Elige la tarea en el recurso `promptbatch://tareas`, o escribe una nueva (`.md` con cabecera TOML entre
-   `+++`, system, `---prompt---` y el prompt con `{{contenido}}`; ver el README de promptbatch).
-2. `lanzar(..., modo="estimar")` siempre primero. **Enseña la estimación al usuario y pide permiso antes de
-   gastar**, salvo que ya haya fijado un tope para esa tarea.
-3. Prueba con `limite` pequeño (2–3) en modo `directo` y revisa tú una muestra leyendo los ficheros.
-4. El resto en modo `lote` con `max_coste`, y `consultar(salida)` más tarde.
-5. Lo que quede en `_revisar/` (no pasó las comprobaciones) se mira a mano o se relanza tras mejorar la tarea.
+- The same instruction over many files (more than 3 to 5) or with long outputs: translating, fixing typos,
+  classifying, writing descriptions, summarizing.
+- Not for work that needs back-and-forth with the user or case-by-case decisions: that stays in the conversation.
 
-## Reglas
-- No leas en la conversación todas las salidas: solo una muestra y las de `_revisar/`.
-- Relanzar no repite (ni paga) lo ya hecho: para rehacer algo, borra su fichero de salida.
-- Si una tarea falla a menudo por lo mismo, mejora su guía o su prompt antes de seguir.
+## How
+
+1. Pick the task from the `promptbatch://tasks` resource, or write a new one (a `.md` with a TOML header between
+   `+++`, the system prompt, `---prompt---` and the prompt with `{{content}}`; see the promptbatch README).
+2. Always `launch(..., mode="estimate")` first. **Show the estimate to the user and ask before spending**, unless they
+   have already set a limit for that task.
+3. Try a small `limit` (2 or 3) in `direct` mode, with `max_cost`, and review a sample yourself by reading the files.
+4. The rest in `batch` mode with `max_cost`, and `status(output)` later.
+5. Whatever ends up in `_review/` (it failed a check) is looked at by hand or relaunched after improving the task.
+
+## Rules
+
+- Don't read every output in the conversation: only a sample and the ones in `_review/`.
+- Relaunching doesn't repeat (or pay for) what is done: to redo something, delete its output file.
+- If a task often fails for the same reason, improve its guide or its prompt before going on.
